@@ -144,6 +144,8 @@ if __name__ == "__main__":
     path = sorted(Path("./model").glob("*.h5"))[-1]
     model = load_model(str(path))
 
+    print(model)
+
     # 状態の生成
     state = State()
 
