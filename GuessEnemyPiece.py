@@ -233,6 +233,7 @@ class II_State:
         # 青駒のゴール行動の可否は1ターンに1度だけ判定すれば良いので、例外的にlegal_actionsで処理する(ここでは処理しない)
         return actions
 
+    # 思いっきりバグあり(myからしか駒を探してない)
     # 行動を受けて、次の状態に遷移
     def next(self, action_num):
         coordinate_before, coordinate_after = action_to_coordinate(action_num)

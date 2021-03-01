@@ -285,17 +285,17 @@ if __name__ == "__main__":
 
         # 次の状態の取得
         if state.depth % 2 == 1:
-            # just_before_enemy_action_num = just_before_action_num
-            # guess_player_action = GuessEnemyPiece.guess_enemy_piece_player_for_debug(
-            #     model, ii_state, just_before_enemy_action_num
-            # )
-            # just_before_action_num = guess_player_action
-            # print("自作AIの行動番号", just_before_action_num)
-            # state = state.next(just_before_action_num)
+            just_before_enemy_action_num = just_before_action_num
+            guess_player_action = GuessEnemyPiece.guess_enemy_piece_player_for_debug(
+                model, ii_state, just_before_enemy_action_num
+            )
+            just_before_action_num = guess_player_action
+            print("自作AIの行動番号", just_before_action_num)
+            state = state.next(just_before_action_num)
 
-            # just_before_action_num = random_action(state)
-            # print("敵(ランダムAI)の行動番号", just_before_action_num)
-            # state = state.next(just_before_action_num)
+            just_before_action_num = random_action(state)
+            print("敵(ランダムAI)の行動番号", just_before_action_num)
+            state = state.next(just_before_action_num)
         else:
             just_before_action_num = random_action(state)
             print("ランダムAIの行動番号", just_before_action_num)
