@@ -49,7 +49,7 @@ class II_State:
         if all_piece == None:
             # numpyは基本的に型指定しない方が早い(指定すると裏で余計な処理するっぽい)
             self.all_piece = np.zeros(16, dtype=np.int16)
-            # 初期配置を代入(各値は座標を示す)(脱出が88、死亡が99)
+            # 初期配置を代入(各値は座標を示す)(脱出が56(8*6+8)、死亡が63(9*6+9))
             # 0~7は敵駒, 8~15は自駒
             self.all_piece[0] = 1
             self.all_piece[1] = 2
@@ -121,7 +121,7 @@ class II_State:
         print("my:self.all_piece", piece_coordinate_array)
 
         for piece_coordinate in piece_coordinate_array:
-            # 88以上は行動できないので省く(0~35)
+            # 56以上は行動できないので省く(0~35)
             if piece_coordinate < 36:
                 actions.extend(
                     self.piece_coordinate_to_actions(
@@ -144,14 +144,14 @@ class II_State:
             if self.all_piece[i] < 36:
                 piece_coordinate_array[index] = 35 - self.all_piece[i]
             else:
-                piece_coordinate_array[index] = 99
+                piece_coordinate_array[index] = 63
             index += 1
         np.sort(piece_coordinate_array)
 
         print("enemy:self.all_piece", piece_coordinate_array)
 
         for piece_coordinate in piece_coordinate_array:
-            # 88以上は行動できないので省く(0~35)
+            # 56以上は行動できないので省く(0~35)
             if piece_coordinate < 36:
                 actions.extend(
                     self.piece_coordinate_to_actions(
@@ -258,7 +258,7 @@ class II_State:
     def enemy_next(self, before_coordinate, now_coordinate):
         kill = np.any(self.all_piece == now_coordinate)
 
-        # 敵駒がkillしていたら死んだ駒の処理を行う(99は死んだ駒)
+        # 敵駒がkillしていたら死んだ駒の処理を行う(63は死んだ駒)
         if kill:
             dead_piece_ID = np.where(self.all_piece == now_coordinate)[0][0]
             color_is_blue = np.any(self.real_my_piece_blue_set == dead_piece_ID)
@@ -343,12 +343,16 @@ def calculate_enemy_action_number_from_coordinate(before_coordinate, now_coordin
     difference = enemy_looking_now_coordinate - enemy_looking_before_coordinate
     if difference == 6:  # 下
         return position_to_action(enemy_looking_before_coordinate, 0)
-    elif difference == 1:  # 左
+    elif difference == -1:  # 左
         return position_to_action(enemy_looking_before_coordinate, 1)
     elif difference == -6:  # 上
         return position_to_action(enemy_looking_before_coordinate, 2)
-    elif difference == -1:  # 右
+    elif difference == 1:  # 右
         return position_to_action(enemy_looking_before_coordinate, 3)
+    elif difference == -21:  # ゴール
+        return 2
+    elif difference == -26:  # ゴール
+        return 22
     else:
         print("ERROR:find_enemy_action_number_from_coordinate(illegal move)")
         return -1
@@ -445,9 +449,10 @@ def enemy_ii_predict(model, ii_state):
 
 # 相手の行動から推測値を更新
 # state, enemy_ii_predictで作成した推測値の行列, 敵の行動番号
-def update_predict_num_all(ii_state, beforehand_estimated_num, enemy_action_num):
-    print(enemy_action_num)
+def update_all_predict_num(ii_state, beforehand_estimated_num, enemy_action_num):
+    print("enemy_action_num", enemy_action_num)
     enemy_legal_actions = list(ii_state.enemy_legal_actions())
+    print("ela", enemy_legal_actions)
     enemy_action_index = enemy_legal_actions.index(enemy_action_num)
 
     for index, enemy_estimated_num in enumerate(ii_state.enemy_estimated_num):
@@ -473,7 +478,7 @@ def reduce_pattern(dead_piece_ID, color_is_blue: bool, ii_state):
                 ii_state.enemy_estimated_num.remove(enemy_estimated_num)
 
     # all_pieceから削除
-    ii_state.all_piece[dead_piece_ID] = 99
+    ii_state.all_piece[dead_piece_ID] = 63
     # **_piece_listから削除
     if dead_piece_ID < 8:
         ii_state.enemy_piece_list.remove(dead_piece_ID)
@@ -550,6 +555,9 @@ def action_to_sendall_str(ii_state, action_num):
     # 行動する駒の座標を算出
     position = int(action_num / 4)
     # 駒の座標から駒のIDを特定
+    print(ii_state.all_piece)
+    print(position)
+    print(np.where(ii_state.all_piece == position))
     piece_name = ii_state.piece_name[np.where(ii_state.all_piece == position)[0][0]]
 
     # 行動の方角を算出
@@ -602,14 +610,12 @@ def action_to_sendall_str(ii_state, action_num):
 
 # ii_stateと受け取ったバイナリデータを比較して相手の駒の移動前と後の座標を算出
 # なお，ここで求める座標は自分目線になっている
-def recv_str_to_coordinate(ii_state, now_tcp_str_b):
-    # バイナリデータをデコード
-    now_tcp_str = now_tcp_str_b.decode(encoding="utf-8")
-
+def recv_str_to_coordinate(ii_state, now_tcp_str):
     # ex)MOV?14R24R34R44R15B25B35B45B41u31u21u11u40u30u20u10u\r\n
     # のように，28〜51番目に相手の駒の情報が格納されている
     now_piece = [0, 0, 0, 0, 0, 0, 0, 0]
     for i in range(8):
+        print(now_tcp_str)
         x = int(now_tcp_str[28 + i * 3])
         y = int(now_tcp_str[28 + i * 3 + 1])
         # now_tcp_strからii_state.all_pieceと対応した座標を入手
@@ -622,8 +628,8 @@ def recv_str_to_coordinate(ii_state, now_tcp_str_b):
 
     before_coordinate = ii_state.all_piece[i]
     now_coordinate = now_piece[i]
-    print("移動前：", before_coordinate)
-    print("移動後：", now_coordinate)
+    print("移動前：", ii_state.all_piece, before_coordinate)
+    print("移動後：", now_piece, now_coordinate)
 
     return before_coordinate, now_coordinate
 
@@ -655,15 +661,17 @@ def recv_str_to_coordinate(ii_state, now_tcp_str_b):
 def from_recv_to_action_num(model, ii_state, beforehand_estimated_num, now_tcp_str):
     # 前回のstrと受けたstrを並べて相手のaction_numを算出
     before, now = recv_str_to_coordinate(ii_state, now_tcp_str)  # 座標を算出
+    print("b n", before, now)
     enemy_action_num = calculate_enemy_action_number_from_coordinate(
         before, now
     )  # 行動番号を算出
+    print(enemy_action_num)
+
+    # 相手の行動から推測値を更新
+    update_all_predict_num(ii_state, beforehand_estimated_num, enemy_action_num)
 
     # 相手の行動からii_stateを更新
     ii_state.enemy_next(before, now)
-
-    # 相手の行動から推測値を更新
-    update_predict_num_all(ii_state, beforehand_estimated_num, enemy_action_num)
 
     # 自分の行動を決定
     action_num = action_decision(model, ii_state)
@@ -676,11 +684,11 @@ def first_move(model, ii_state):
     # 自分の行動を決定
     action_num = 106  # Bを前進させる手 #適宜変更
 
+    # 自分の行動をsendall可能なバイナリデータに変換
+    sendall_str_b = action_to_sendall_str(ii_state, action_num)
+
     # 自分の行動でii_stateを更新
     ii_state.next(action_num)
-
-    # 自分の行動をsendall可能なバイナリデータに変換
-    sendall_str_b = action_to_sendall_str(action_num)
 
     # sendall予定のバイナリデータを返す
     return sendall_str_b
@@ -688,7 +696,8 @@ def first_move(model, ii_state):
 
 def main():
     print("Please input a port number that you want to connect.")
-    port = int(input())
+    port = 10000
+    # port = int(input())
 
     path = sorted(Path("./model").glob("*.h5"))[-1]
     model = load_model(str(path))
@@ -718,25 +727,30 @@ def main():
             print("駒のセット失敗")
 
         now_tcp_str = ""  # 直前に受け取ったtcp
+        # 受け取ったdataをstrに変換
+        data = s.recv(2048)
+        now_tcp_str = data.decode(encoding="utf-8")
+        print(now_tcp_str)
 
         # 先行
         if port == 10000:
             # 先行の1手目は例外的に決まった行動をとる
             sendall_str_b = first_move(model, ii_state)
             s.sendall(sendall_str_b)
+            data = s.recv(2048)
+            print(data)
 
-        # 受け取ったdataをstrに変換
-        data = s.recv(2048)
-        now_tcp_str = data.decode(encoding="utf-8")
+            data = s.recv(2048)
+            now_tcp_str = data.decode(encoding="utf-8")
 
         while 1:
             # 相手の行動からii_stateを更新→推測値の更新→action_numの決定
-            action_num = from_recv_action_num(
+            action_num = from_recv_to_action_num(
                 model, ii_state, beforehand_estimated_num, now_tcp_str
             )
 
             # 自分の行動をsendall可能なバイナリデータに変換
-            sendall_str_b = action_to_sendall_str(action_num)
+            sendall_str_b = action_to_sendall_str(ii_state, action_num)
             print("自分の行動", str(sendall_str_b))
 
             kill_and_id_index = ii_state.this_action_will_kill(action_num)
@@ -745,6 +759,8 @@ def main():
 
                 # 行動を送信
                 s.sendall(sendall_str_b)
+                data = s.recv(2048)
+                print(data)
 
                 # 受け取ったdataをstrに変換
                 data = s.recv(2048)
@@ -761,6 +777,8 @@ def main():
 
                 # 行動を送信
                 s.sendall(sendall_str_b)
+                data = s.recv(2048)
+                print(data)
 
                 # 自分の行動でii_stateを更新
                 ii_state.next(action_num)
