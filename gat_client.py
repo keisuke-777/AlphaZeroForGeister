@@ -11,7 +11,7 @@ from dual_network import DN_INPUT_SHAPE
 from pathlib import Path
 from tensorflow.keras.models import load_model
 
-gamma = 0.9
+gamma = 0.95
 
 # 不完全情報ガイスターの盤面情報及びそれらの推測値を管理
 class II_State:
@@ -297,42 +297,6 @@ class II_State:
         self.all_piece[
             np.where(self.all_piece == before_coordinate)[0][0]
         ] = now_coordinate
-
-    # ボードの文字列表示
-    def __str__(self):
-        row = "|{}|{}|{}|{}|{}|{}|"
-        hr = "\n-------------------------------\n"
-
-        # 1つのボードに味方の駒と敵の駒を集める
-        board = [0] * 36
-        if self.depth % 2 == 0:
-            my_p = self.pieces.copy()
-            rev_ep = list(reversed(self.enemy_pieces))
-            for i in range(36):
-                board[i] = my_p[i] - rev_ep[i]
-        else:
-            my_p = list(reversed(self.pieces))
-            rev_ep = self.enemy_pieces.copy()
-            for i in range(36):
-                board[i] = rev_ep[i] - my_p[i]
-
-        board_essence = []
-        for i in board:
-            if i == 1:
-                board_essence.append("自青")
-            elif i == 2:
-                board_essence.append("自赤")
-            elif i == -1:
-                board_essence.append("敵青")
-            elif i == -2:
-                board_essence.append("敵赤")
-            else:
-                board_essence.append("　　")
-
-        str = (
-            hr + row + hr + row + hr + row + hr + row + hr + row + hr + row + hr
-        ).format(*board_essence)
-        return str
 
 
 # 完全情報ガイスターの状態(MCTSの際に使用予定)
@@ -629,6 +593,7 @@ def mcts_action(model, ii_state):
 
     # ii_stateからstateを生成
     state = ii_state.create_state(enemy_blue_pattern_tuple)
+    print("state", state)
 
     # 生成したstateに対してMCTSを実行(これを各stateに対しても実行)
     value_list = mcts_value(state)
@@ -898,6 +863,11 @@ def action_to_sendall_str(ii_state, action_num):
         direction = "WEST"  # 左
     elif direction_num == 2:
         direction = "NORTH"  # 上
+        # ゴール処理(プロトコル見て知ったけど左右に脱出する感じらしい)
+        if action_num == 2:
+            direction = "W"
+        if action_num == 22:
+            direction = "E"
     else:  # direction_num == 3
         direction = "EAST"  # 右
 
@@ -1021,6 +991,9 @@ def mcts_from_recv_to_action_num(
         before, now
     )  # 行動番号を算出
     print(enemy_action_num)
+    # デバッグ用
+    if enemy_action_num == -1:
+        return -1
 
     # 相手の行動から推測値を更新
     update_all_predict_num(ii_state, beforehand_estimated_num, enemy_action_num)
@@ -1071,7 +1044,11 @@ def main():
         print(repr(data))
 
         # 赤駒のセット
-        s.sendall(b"SET:ABCD\r\n")
+        red_piece = ""
+        for rp_index in ii_state.real_my_piece_red_set:
+            red_piece += str(ii_state.piece_name[rp_index])
+        send_str = "SET:" + red_piece + "\r\n"
+        s.sendall(send_str.encode(encoding="utf-8"))
         data = s.recv(2048)
         print(repr(data))
 
@@ -1103,6 +1080,12 @@ def main():
             action_num = mcts_from_recv_to_action_num(
                 model, ii_state, beforehand_estimated_num, now_tcp_str
             )
+            if action_num == -1:
+                for _ in range(10):
+                    data = s.recv(2048)
+                    print(data)
+
+            print("num", ii_state.enemy_estimated_num)
 
             # 自分の行動をsendall可能なバイナリデータに変換
             sendall_str_b = action_to_sendall_str(ii_state, action_num)
