@@ -251,6 +251,66 @@ from dual_network import DN_INPUT_SHAPE
 from pathlib import Path
 from tensorflow.keras.models import load_model
 
+# logのやつの戦闘データ一気にとる
+drow_count = 0
+
+
+def evaluate_miniGeisterLog():
+    global drow_count
+    for i in range(1, 20):
+        drow_count = 0
+        model_pass_str = "./miniGeisterLog/log" + str(i) + ".h5"
+        model = load_model(model_pass_str)
+        win_player = [0, 0]
+        for _ in range(100):
+            # 直前の行動を保管
+            just_before_action_num = 0
+
+            # 状態の生成
+            state = State()
+            blue_id_list = state.get_blue_from_keep_pieces_color()
+            ii_state = GuessEnemyPiece.II_State(
+                {blue_id_list[2], blue_id_list[3]}, {blue_id_list[0], blue_id_list[1]}
+            )
+
+            # ゲーム終了までのループ
+            while True:
+                # ゲーム終了時
+                if state.is_done():
+                    break
+
+                # 次の状態の取得
+                if state.depth % 2 == 0:
+                    # just_before_action_num = random_action(state)  # ランダム
+                    # just_before_action_num = mcts_action(state)  # 透視モンテカルロ木探索
+                    # just_before_action_num = no_cheat_mcts_action(
+                    #     state
+                    # )  # ズルなしモンテカルロ木探索
+                    just_before_action_num = no_cheat_and_fix_mcts_action(
+                        state
+                    )  # ズルなし固定なしモンテカルロ木探索
+                    if just_before_action_num == 2 or just_before_action_num == 14:
+                        state.is_goal = True
+                        state.goal_player = 0
+                        break
+                    state = state.next(just_before_action_num)
+                else:
+                    just_before_enemy_action_num = just_before_action_num
+                    guess_player_action = GuessEnemyPiece.guess_enemy_piece_player_for_debug(
+                        model, ii_state, just_before_enemy_action_num
+                    )
+                    just_before_action_num = guess_player_action
+
+                    if just_before_action_num == 2 or just_before_action_num == 14:
+                        state.is_goal = True
+                        state.goal_player = 1
+                        break
+                    state = state.next(just_before_action_num)
+            state.winner_checker(win_player)
+        print("[log_player,mcts]:", win_player)
+    K.clear_session()
+    del model
+
 
 # 動作確認
 if __name__ == "__main__":
