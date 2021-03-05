@@ -9,6 +9,7 @@ test
 test/*
 AllLogFile
 AllLogFile/*
+gat_test.py
 
 # ver3.6.9
 .python-version
