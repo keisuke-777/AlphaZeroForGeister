@@ -52,14 +52,14 @@ class State:
     # 負けかどうか
     def is_lose(self):
         if not any(elem == 1 for elem in self.pieces):  # 自分の青駒が存在しないなら負け
-            print("青喰い")
+            # print("青喰い")
             return True
         if not any(elem == 2 for elem in self.enemy_pieces):  # 敵の赤駒が存在しない(全部取っちゃった)なら負け
-            print("赤喰い")
+            # print("赤喰い")
             return True
         # 前の手でゴールされてたらis_goalがTrueになってる(ような仕様にする)
         if self.is_goal:
-            print("ゴール")
+            # print("ゴール")
             return True
         return False
 
@@ -179,6 +179,36 @@ class State:
     def is_first_player(self):
         return self.depth % 2 == 0
 
+    # どちらのプレイヤーが勝利したか判定
+    # 勝敗決定時にやるだけだからそんな高速化しないで大丈夫
+    def winner_checker(self, win_player):
+        if self.is_goal:
+            win_player[self.goal_player] += 1
+            return
+
+        board = [0] * 36
+        if self.depth % 2 == 0:
+            my_p = self.pieces.copy()
+            rev_ep = list(reversed(self.enemy_pieces))
+            for i in range(36):
+                board[i] = my_p[i] - rev_ep[i]
+        else:
+            my_p = list(reversed(self.pieces))
+            rev_ep = self.enemy_pieces.copy()
+            for i in range(36):
+                board[i] = rev_ep[i] - my_p[i]
+
+        if not any(elem == 1 for elem in board):  # 先手の青駒が存在しない
+            win_player[1] += 1  # 後手の勝ち
+        elif not any(elem == 2 for elem in board):  # 先手の赤駒が存在しない
+            win_player[0] += 1  # 先手の勝ち
+        elif not any(elem == -1 for elem in board):  # 後手の青駒が存在しない
+            win_player[0] += 1  # 先手の勝ち
+        elif not any(elem == -2 for elem in board):  # 後手の赤駒が存在しない
+            win_player[1] += 1  # 後手の勝ち
+        else:
+            pass
+
     # 文字列表示
     def __str__(self):
         row = "|{}|{}|{}|{}|{}|{}|"
@@ -246,32 +276,142 @@ import GuessEnemyPiece
 import numpy as np
 import itertools
 import time
-from pv_mcts import predict
+from pv_mcts import predict, pv_mcts_scores, pv_mcts_action
 from dual_network import DN_INPUT_SHAPE
 from pathlib import Path
 from tensorflow.keras.models import load_model
+
+# 価値の高い行動を愚直に選択し続ける
+def predict_action(model, state):
+    policies, value = predict(model, state)
+    legal_actions = state.legal_actions()
+    best_policie_action_index = np.argmax(policies)
+    return legal_actions[best_policie_action_index]
+
+
+# モンテカルロ木探索の行動選択
+def mcts_action(state):
+    # モンテカルロ木探索のノード
+    class node:
+        # 初期化
+        def __init__(self, state):
+            self.state = state  # 状態
+            self.w = 0  # 累計価値
+            self.n = 0  # 試行回数
+            self.child_nodes = None  # 子ノード群
+
+        # 評価
+        def evaluate(self):
+            # ゲーム終了時
+            if self.state.is_done():
+                # 勝敗結果で価値を取得
+                value = -1 if self.state.is_lose() else 0  # 負けは-1、引き分けは0
+
+                # 累計価値と試行回数の更新
+                self.w += value
+                self.n += 1
+                return value
+
+            # 子ノードが存在しない時
+            if not self.child_nodes:
+                # プレイアウトで価値を取得
+                value = playout(self.state)
+
+                # 累計価値と試行回数の更新
+                self.w += value
+                self.n += 1
+
+                # 子ノードの展開
+                if self.n == 10:
+                    self.expand()
+                return value
+
+            # 子ノードが存在する時
+            else:
+                # UCB1が最大の子ノードの評価で価値を取得
+                value = -self.next_child_node().evaluate()
+
+                # 累計価値と試行回数の更新
+                self.w += value
+                self.n += 1
+                return value
+
+        # 子ノードの展開
+        def expand(self):
+            legal_actions = self.state.legal_actions()
+            self.child_nodes = []
+            for action in legal_actions:
+                self.child_nodes.append(node(self.state.next(action)))
+
+        # UCB1が最大の子ノードを取得
+        def next_child_node(self):
+            # 試行回数nが0の子ノードを返す
+            for child_node in self.child_nodes:
+                if child_node.n == 0:
+                    return child_node
+
+            # UCB1の計算
+            t = 0
+            for c in self.child_nodes:
+                t += c.n
+            ucb1_values = []
+            for child_node in self.child_nodes:
+                ucb1_values.append(
+                    -child_node.w / child_node.n
+                    + 2 * (2 * math.log(t) / child_node.n) ** 0.5
+                )
+
+            # UCB1が最大の子ノードを返す
+            return self.child_nodes[argmax(ucb1_values)]
+
+    # ルートノードの生成
+    root_node = node(state)
+    root_node.expand()
+
+    # ルートノードを評価 (rangeを変化させると評価回数を変化させられる)
+    for _ in range(100):
+        root_node.evaluate()
+
+    # 試行回数の最大値を持つ行動を返す
+    legal_actions = state.legal_actions()
+    n_list = []
+    for c in root_node.child_nodes:
+        n_list.append(c.n)
+    return legal_actions[argmax(n_list)]
+
+
+# ゲームの終端までシミュレート
+def playout(state):
+    if state.is_lose():
+        return -1
+    if state.is_draw():
+        return 0
+    return -playout(state.next(random_action(state)))
+
+
+# 最大値のインデックスを返す
+def argmax(v_list):
+    return v_list.index(max(v_list))
+
 
 # logのやつの戦闘データ一気にとる
 drow_count = 0
 
 
-def evaluate_miniGeisterLog():
+def evaluate_GeisterLog():
     global drow_count
-    for i in range(1, 20):
+    for i in range(10, 20):
         drow_count = 0
-        model_pass_str = "./miniGeisterLog/log" + str(i) + ".h5"
+        model_pass_str = "./AllLogFile/" + str(i) + ".h5"
         model = load_model(model_pass_str)
         win_player = [0, 0]
         for _ in range(100):
             # 直前の行動を保管
             just_before_action_num = 0
-
             # 状態の生成
             state = State()
-            blue_id_list = state.get_blue_from_keep_pieces_color()
-            ii_state = GuessEnemyPiece.II_State(
-                {blue_id_list[2], blue_id_list[3]}, {blue_id_list[0], blue_id_list[1]}
-            )
+
+            predict_mcts = pv_mcts_action(model)
 
             # ゲーム終了までのループ
             while True:
@@ -281,39 +421,41 @@ def evaluate_miniGeisterLog():
 
                 # 次の状態の取得
                 if state.depth % 2 == 0:
-                    # just_before_action_num = random_action(state)  # ランダム
-                    # just_before_action_num = mcts_action(state)  # 透視モンテカルロ木探索
+                    just_before_action_num = random_action(state)  # ランダム
+                    # just_before_action_num = mcts_action(state)  # モンテカルロ木探索
                     # just_before_action_num = no_cheat_mcts_action(
                     #     state
                     # )  # ズルなしモンテカルロ木探索
-                    just_before_action_num = no_cheat_and_fix_mcts_action(
-                        state
-                    )  # ズルなし固定なしモンテカルロ木探索
-                    if just_before_action_num == 2 or just_before_action_num == 14:
+                    # just_before_action_num = no_cheat_and_fix_mcts_action(
+                    #     state
+                    # )  # ズルなし固定なしモンテカルロ木探索
+                    if just_before_action_num == 2 or just_before_action_num == 22:
                         state.is_goal = True
                         state.goal_player = 0
                         break
                     state = state.next(just_before_action_num)
                 else:
-                    just_before_enemy_action_num = just_before_action_num
-                    guess_player_action = GuessEnemyPiece.guess_enemy_piece_player_for_debug(
-                        model, ii_state, just_before_enemy_action_num
-                    )
-                    just_before_action_num = guess_player_action
+                    # just_before_enemy_action_num = just_before_action_num
+                    # guess_player_action = GuessEnemyPiece.guess_enemy_piece_player_for_debug(
+                    #     model, ii_state, just_before_enemy_action_num
+                    # )
+                    # just_before_action_num = guess_player_action
 
-                    if just_before_action_num == 2 or just_before_action_num == 14:
+                    # just_before_action_num = predict_action(model, state)
+                    just_before_action_num = predict_mcts(state)  # 学習データを使ったMCTS
+                    if just_before_action_num == 2 or just_before_action_num == 22:
                         state.is_goal = True
                         state.goal_player = 1
                         break
                     state = state.next(just_before_action_num)
             state.winner_checker(win_player)
+            print(win_player)
         print("[log_player,mcts]:", win_player)
     K.clear_session()
     del model
 
 
-# 動作確認
-if __name__ == "__main__":
+def main():
     # 状態の生成
     state = State()
 
@@ -329,18 +471,18 @@ if __name__ == "__main__":
     while True:
         # ゲーム終了時
         if state.is_done():
-            print("ゲーム終了:ターン数", state.depth)
+            # print("ゲーム終了:ターン数", state.depth)
 
-            if state.is_lose():
-                if state.depth % 2 == 0:
-                    print("敗北")
-                else:
-                    print("勝利or引き分け")
-            else:
-                if state.depth % 2 == 1:
-                    print("勝利or引き分け")
-                else:
-                    print("敗北")
+            # if state.is_lose():
+            #     if state.depth % 2 == 0:
+            #         print("敗北")
+            #     else:
+            #         print("勝利or引き分け")
+            # else:
+            #     if state.depth % 2 == 1:
+            #         print("勝利or引き分け")
+            #     else:
+            #         print("敗北")
             break
 
         # 次の状態の取得
@@ -350,17 +492,23 @@ if __name__ == "__main__":
                 model, ii_state, just_before_enemy_action_num
             )
             just_before_action_num = guess_player_action
-            print("自作AIの行動番号", just_before_action_num)
+            # print("自作AIの行動番号", just_before_action_num)
             state = state.next(just_before_action_num)
 
             just_before_action_num = random_action(state)
-            print("敵(ランダムAI)の行動番号", just_before_action_num)
+            # print("敵(ランダムAI)の行動番号", just_before_action_num)
             state = state.next(just_before_action_num)
         else:
             just_before_action_num = random_action(state)
-            print("ランダムAIの行動番号", just_before_action_num)
+            # print("ランダムAIの行動番号", just_before_action_num)
             state = state.next(just_before_action_num)
 
         # 文字列表示
         # print("depth", state.depth)
         print(state)
+
+
+# 動作確認
+if __name__ == "__main__":
+    # main()
+    evaluate_GeisterLog()
